@@ -53,7 +53,9 @@ TEST(testMatrix, deviceSigmoid) {
 
   DSigmoid(d_X_in, d_X_out);
   d_X_out.to_cpu(X_out_gpu);
-
+  
+  std::cout << X_out_gpu(1,1) << std::endl;
+  std::cout << X_out_gpu(2,2) << std::endl;
   EXPECT_EQ(true, arma::approx_equal(X_out, X_out_gpu, "absdiff", TOL));
   EXPECT_EQ(true, arma::approx_equal(X_out, X_out_gpu, "reldiff", TOL));
 }

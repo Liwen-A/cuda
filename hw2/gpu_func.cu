@@ -16,21 +16,33 @@
 DeviceAllocator::DeviceAllocator(nn_real *cpu_data, int n)
 {
   // TODO: implement this constructor
+  nbytes = n * sizeof(nn_real);
+  nn_real* gpu_data = nullptr;
+  checkCudaErrors(cudaMalloc(&gpu_data, nbytes));
+  checkCudaErrors(cudaMemcpy(gpu_data,cpu_data,nbytes,cudaMemcpyHostToDevice));
+  data = gpu_data;
 }
 
 DeviceAllocator::DeviceAllocator(int n)
 {
   // TODO: implement this constructor
+  nbytes = n * sizeof(nn_real);
+  nn_real* gpu_data = nullptr;
+  checkCudaErrors(cudaMalloc(&gpu_data, nbytes));
+  data = gpu_data;
 }
 
 DeviceAllocator::~DeviceAllocator()
 {
   // TODO: implement this destructor
+  checkCudaErrors(cudaFree(data));
+  nbytes = 0;
 }
 
 void DeviceAllocator::to_cpu(nn_real *cpu_data)
 {
   // TODO: implement this function
+  checkCudaErrors(cudaMemcpy(cpu_data,data,nbytes,cudaMemcpyDeviceToHost));
 }
 
 // +-*=+-*=+-*=+-*=+-*=+-*=+-*=+-*=+*-=+-*=+*-=+-*=+-*=+-*=+-*=+-*= //
@@ -40,11 +52,19 @@ void DeviceAllocator::to_cpu(nn_real *cpu_data)
 DeviceMatrix::DeviceMatrix(int n_rows, int n_cols)
 {
   // TODO: implement this constructor
+  n_rows = n_rows;
+  n_cols = n_cols;
+  allocator = std::make_shared<DeviceAllocator>(n_cols * n_rows);
+  data = allocator->data;
 }
 
 DeviceMatrix::DeviceMatrix(arma::Mat<nn_real> &cpu_mat)
 {
   // TODO: implement this constructor
+  n_cols = cpu_mat.n_cols;
+  n_rows = cpu_mat.n_rows;
+  nn_real* cpu_data = cpu_mat.memptr();
+  allocator = std::make_shared<DeviceAllocator>(cpu_data,n_cols*n_rows);
 }
 
 void DeviceMatrix::to_cpu(arma::Mat<nn_real> &cpu_mat)
@@ -78,6 +98,11 @@ __global__ void MatSigmoid(DeviceMatrix src, DeviceMatrix dst)
 {
   // TODO: implement this kernel function
   // Hint: Use Exp() from common.h
+  int row = blockDim.y * blockIdx.y + threadIdx.y;
+  int col = blockDim.x * blockIdx.x + threadIdx.x;
+  if (row < src.n_rows && col < src.n_cols){
+    dst(row,col) = 1. / (1.+ Exp(-src(row,col)));
+  } 
 }
 
 /**
@@ -206,6 +231,9 @@ void DSigmoid(DeviceMatrix src, DeviceMatrix dst)
   // TODO: implement this function
 
   CHECK_LAUNCH("DSigmoid");
+  dim3 threadsPerBlock(src.n_cols,src.n_rows);
+  dim3 blockPerGrid(1,1);
+  MatSigmoid<<<blockPerGrid,threadsPerBlock>>>(src,dst);
 }
 
 void DRepeatColVec(DeviceMatrix src, DeviceMatrix dst, int repeat)
