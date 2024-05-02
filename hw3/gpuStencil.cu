@@ -74,9 +74,10 @@ void gpuStencilGlobal(float* next, const float* __restrict__ curr, int gx, int n
     // TODO
     int id = blockDim.x * blockIdx.x + threadIdx.x;
     int i = id / nx;
-    if (id < nx*ny)
+    if (id < nx*ny){
         id += gx * order/2 + order/2 + order * i;
         next[id] = Stencil<order>(&curr[id],gx,xcfl,ycfl);
+    }
 }
 
 /**
@@ -158,6 +159,17 @@ __global__
 void gpuStencilBlock(float* next, const float* __restrict__ curr, int gx, int nx, int ny,
                     float xcfl, float ycfl) {
     // TODO
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    int idy = blockDim.y * blockIdx.y + threadIdx.y;
+    
+    if ((idx < nx) && (idy * numYPerStep + numYPerStep -1  < ny)){
+        for (int i = 0; i < numYPerStep; i++){
+            int x = idx; // x index on inner grid
+            int y = idy * numYPerStep + i; // y index on inner grid
+            int arr_idx =  x + gx * (y + order/2) + order/2; //index in 1d array in terms of x,y
+            next[arr_idx] = Stencil<order>(&curr[arr_idx],gx,xcfl,ycfl);
+        }
+    }
 }
 
 /**
@@ -178,8 +190,19 @@ double gpuComputationBlock(Grid& curr_grid, const simParams& params) {
     Grid next_grid(curr_grid);
 
     // TODO: Declare variables/Compute parameters.
-    dim3 threads(0, 0);
-    dim3 blocks(0, 0);
+    int gx = params.gx();
+    int gy = params.gy();
+    int nx = params.nx();
+    int ny = params.ny();
+    float xcfl = params.xcfl();
+    float ycfl = params.ycfl();
+    int numYPerStep = 4;
+    int threadX = 64;
+    int threadY = 8;
+    int blockX = nx / threadX  + 1;
+    int blockY = ny / (threadY*numYPerStep) + 1;
+    dim3 threads(threadX, threadY);
+    dim3 blocks(blockX, blockY);
 
     event_pair timer;
     start_timer(&timer);
@@ -189,6 +212,16 @@ double gpuComputationBlock(Grid& curr_grid, const simParams& params) {
         BC.updateBC(next_grid.dGrid_, curr_grid.dGrid_);
 
         // TODO: Apply stencil.
+        if (params.order() == 2){
+             gpuStencilBlock<2,4><<<blocks,threads>>>(next_grid.dGrid_,curr_grid.dGrid_,gx,nx,ny,xcfl,ycfl);
+        }
+        else if (params.order() == 4){
+             gpuStencilBlock<4,4><<<blocks,threads>>>(next_grid.dGrid_,curr_grid.dGrid_,gx,nx,ny,xcfl,ycfl);
+        }
+        else if (params.order() == 8){
+             gpuStencilBlock<8,4><<<blocks,threads>>>(next_grid.dGrid_,curr_grid.dGrid_,gx,nx,ny,xcfl,ycfl);
+        }
+
 
         Grid::swap(curr_grid, next_grid);
     }
@@ -217,6 +250,17 @@ __global__
 void gpuStencilShared(float* next, const float* __restrict__ curr, int gx, int gy,
                float xcfl, float ycfl) {
     // TODO
+    // int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    // int idy = blockDim.y * blockIdx.y + threadIdx.y;
+    
+    // __shared__ float block[side][side];
+
+    // if (idx < nx && idy < ny){
+    //     int g_id =  idx + gx * (idy + order/2) + order/2;
+    //     block[threadIdx.x][threadIdx.y] = curr[g_id];
+    // }
+    // __syncthreads();
+
 }
 
 /**
@@ -238,8 +282,19 @@ double gpuComputationShared(Grid& curr_grid, const simParams& params) {
     Grid next_grid(curr_grid);
 
     // TODO: Declare variables/Compute parameters.
-    dim3 threads(0, 0);
-    dim3 blocks(0, 0);
+    int gx = params.gx();
+    int gy = params.gy();
+    int nx = params.nx();
+    int ny = params.ny();
+    float xcfl = params.xcfl();
+    float ycfl = params.ycfl();
+
+    int threadX = 32;
+    int threadY = 32;
+    int blockX = nx / threadX  + 1;
+    int blockY = ny / threadY + 1;
+    dim3 threads(threadX, threadY);
+    dim3 blocks(blockX, blockY);
 
     event_pair timer;
     start_timer(&timer);
