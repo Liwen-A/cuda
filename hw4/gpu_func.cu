@@ -84,6 +84,16 @@ __global__ void BasicMatMulColumnMajor(DeviceMatrix A, DeviceMatrix B,
                                        DeviceMatrix C, nn_real alpha,
                                        nn_real beta) {
   // TODO: Implement this kernel
+  int id = blockDim.x * blockIdx.x + threadIdx.x; 
+  if (id < C.n_cols * C.n_rows){
+    int i = id % C.n_rows;
+    int j = id / C.n_rows;
+    float cum_sum = 0.0;
+    for (int k = 0; k < A.n_cols; k++){
+      cum_sum += A(i,k) * B(k,j) ;
+    }
+    C(i,j) = alpha * cum_sum + beta * C(i,j);
+  }
 }
 
 void basicGEMMColumnMajor(DeviceMatrix A, DeviceMatrix B, DeviceMatrix C,
@@ -91,7 +101,11 @@ void basicGEMMColumnMajor(DeviceMatrix A, DeviceMatrix B, DeviceMatrix C,
   // TODO: Implement this kernel wrapper
   // Remember that column major means that consecutive threads compute
   // consecutive elements in a column of the output matrix
-
+  int numThread = 32*32;
+  int numBlock = C.n_cols * C.n_rows / numThread+1;
+  dim3 blockPerGrid(numBlock);
+  dim3 threadPerBlock(numThread);
+  BasicMatMulColumnMajor<<<blockPerGrid,threadPerBlock>>>(A,B,C,alpha,beta);
   check_launch("basicGEMMColumnMajor");
 }
 
@@ -99,6 +113,16 @@ __global__ void BasicMatMulRowMajor(DeviceMatrix A, DeviceMatrix B,
                                     DeviceMatrix C, nn_real alpha,
                                     nn_real beta) {
   // TODO: Implement this kernel
+  int id = blockDim.x * blockIdx.x + threadIdx.x; 
+  if (id < C.n_cols * C.n_rows){
+    int i = id / C.n_cols;
+    int j = id % C.n_cols;
+    float cum_sum = 0.0;
+    for (int k = 0; k < A.n_cols; k++){
+      cum_sum += A(i,k) * B(k,j) ;
+    }
+    C(i,j) = alpha * cum_sum + beta * C(i,j);
+  }
 }
 
 void basicGEMMRowMajor(DeviceMatrix A, DeviceMatrix B, DeviceMatrix C,
@@ -106,7 +130,11 @@ void basicGEMMRowMajor(DeviceMatrix A, DeviceMatrix B, DeviceMatrix C,
   // TODO: Implement this kernel wrapper
   // Remember that row major means that consecutive threads compute
   // consecutive elements in a row of the output matrix
-
+  int numThread = 32*32;
+  int numBlock = C.n_cols * C.n_rows / numThread+1;
+  dim3 blockPerGrid(numBlock);
+  dim3 threadPerBlock(numThread);
+  BasicMatMulColumnMajor<<<blockPerGrid,threadPerBlock>>>(A,B,C,alpha,beta);
   check_launch("basicGEMMRowMajor");
 }
 
@@ -116,12 +144,46 @@ __global__ void SharedMemoryMatMul(DeviceMatrix A, DeviceMatrix B,
                                    nn_real beta) {
 
   // TODO: Implement this kernel
+    float CValue = 0;
+
+    int Row = blockIdx.y*blockSizeY + threadIdx.y;
+    int Col = blockIdx.x*blockSizeX+ threadIdx.x;
+
+    __shared__ float As[blockSizeX][blockSizeY];
+    __shared__ float Bs[blockSizeX][blockSizeY];
+    for (int k = 0; k < (blockSizeX + A.n_cols - 1)/blockSizeX; k++) {
+
+      if (k*blockSizeX + threadIdx.x < A.n_cols && Row < A.n_rows)
+          As[threadIdx.y][threadIdx.x] = A(Row , k*blockSizeX+threadIdx.x); 
+      else
+          As[threadIdx.y][threadIdx.x] = 0.0;
+
+      if (k*blockSizeY + threadIdx.y < B.n_rows && Col < B.n_cols)
+          Bs[threadIdx.y][threadIdx.x] =  B(k*blockSizeY+threadIdx.y, Col);
+      else
+          Bs[threadIdx.y][threadIdx.x] = 0.0;
+
+      __syncthreads();
+
+      for (int n = 0; n < blockSizeY; ++n)
+          CValue += alpha*As[threadIdx.y][n] * Bs[n][threadIdx.x];
+
+      __syncthreads();
+    }
+
+    if (Row < C.n_rows && Col < C.n_cols){
+      C(Row,Col) = CValue + beta * C(Row,Col);
+    }
 }
 
 void sharedMemoryGEMM(DeviceMatrix A, DeviceMatrix B, DeviceMatrix C,
                       nn_real alpha, nn_real beta) {
   // TODO: Implement this wrapper
-
+  int blockX = C.n_cols/32+1;
+  int blockY = C.n_rows/32+1;
+  dim3 blockPerGrid(blockX,blockY);
+  dim3 threadPerBlock(32,32);
+  SharedMemoryMatMul<32,32><<<blockPerGrid,threadPerBlock>>>(A,B,C,alpha,beta);
   check_launch("sharedMemoryGEMM");
 }
 
