@@ -199,6 +199,9 @@ void train(NeuralNetwork &nn, const arma::Mat<nn_real> &X,
 GPUGrads::GPUGrads(const NeuralNetwork &nn)
 {
   total_size = 0;
+  for (int i = 0; i < nn.num_layers; i++){
+    total_size += nn.W[i].size() + nn.b[i].size();
+  }
   /**
    * TODO: We need to allocate memory for DeviceMatrix objects that will be
    * stored in the vectors dW and db. For this, we use gpu_mem_pool. The space
@@ -224,6 +227,12 @@ GPUGrads::GPUGrads(const NeuralNetwork &nn)
    * The template pseudo-code looks like:
    * dW[...] = DeviceMatrix(gpu_mem_pool_start + ..., n_rows, n_cols);
    */
+  for (int i = 0; i < nn.num_layers; i++){
+    dW[i] = DeviceMatrix(gpu_mem_pool_start+offset, nn.W[i].n_rows, nn.W[i].n_cols);
+    offset += nn.W[i].size();
+    db[i] = DeviceMatrix(gpu_mem_pool_start+offset,nn.b[i].n_rows,nn.b[i].n_cols);
+    offset += nn.b[i].size();
+  }
 }
 
 DataParallelNeuralNetwork::DataParallelNeuralNetwork(NeuralNetwork &nn,
@@ -239,6 +248,18 @@ DataParallelNeuralNetwork::DataParallelNeuralNetwork(NeuralNetwork &nn,
    * will need to correctly initialize at least: cache.a, cache.z, W[], b[], and
    * reg.
    */
+  this->cache = GPUCache{};
+  this->cache.a.resize(nn.num_layers);
+  this->cache.z.resize(nn.num_layers);
+  this->W.resize(nn.num_layers);
+  this->b.resize(nn.num_layers);
+  this->reg = reg;
+  for (int i = 0; i < nn.num_layers; i++){
+    this->W[i] = DeviceMatrix(nn.W[i]);
+    this->b[i] =DeviceMatrix(nn.b[i]);
+    this->cache.a[i] = DeviceMatrix(nn.b[i].size(),batch_size);
+    this->cache.z[i] = DeviceMatrix(nn.b[i].size(),batch_size);
+  }
 }
 
 void DataParallelNeuralNetwork::forward(const DeviceMatrix &X)
@@ -250,6 +271,35 @@ void DataParallelNeuralNetwork::forward(const DeviceMatrix &X)
    * any new CUDA kernel.
    * Examples of kernels to use: DRepeatColVec, tiledGEMM, DSigmoid, DSoftmax.
    */
+  cache.z.resize(2);
+  cache.a.resize(2);
+
+  cache.X = X;
+  int N = X.n_cols; // batch size
+
+
+// ============layer 1 =========
+
+  DeviceMatrix z0(W[0].n_rows,N); // [b[0],...,b[0]]
+
+  DRepeatColVec(b[0],z0,N);
+  tiledGEMM(W[0],false,X,false,z0,1,1); // z0 = W[0] * X + b0
+  cache.z[0] = z0;
+
+  DeviceMatrix a0(W[0].n_rows,N); 
+  DSigmoid(z0,a0);
+  cache.a[0] = a0;
+
+  // ============layer 2 =========
+  DeviceMatrix z1(W[1].n_rows,N); // [b[1],...,b[1]]
+  DRepeatColVec(b[1],z1,N);
+  tiledGEMM(W[1],false,a0,false,z1,1,1); // z1 = W[1] * a0 + b1
+  cache.z[1] = z1;
+
+  DeviceMatrix a1(W[1].n_rows,N); 
+  DSoftmax(z1,a1,0); 
+  cache.a[1] = a1;
+  cache.yc = a1;
 }
 
 nn_real DataParallelNeuralNetwork::loss(const DeviceMatrix &y, nn_real weight)
