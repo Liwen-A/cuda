@@ -254,12 +254,17 @@ DataParallelNeuralNetwork::DataParallelNeuralNetwork(NeuralNetwork &nn,
   this->W.resize(nn.num_layers);
   this->b.resize(nn.num_layers);
   this->reg = reg;
+  this->lr = lr;
   for (int i = 0; i < nn.num_layers; i++){
     this->W[i] = DeviceMatrix(nn.W[i]);
     this->b[i] =DeviceMatrix(nn.b[i]);
     this->cache.a[i] = DeviceMatrix(nn.b[i].size(),batch_size);
     this->cache.z[i] = DeviceMatrix(nn.b[i].size(),batch_size);
   }
+  
+  this->grads = GPUGrads(nn);
+  this->grads.db.resize(nn.num_layers);
+  this->grads.dW.resize(nn.num_layers);
 }
 
 void DataParallelNeuralNetwork::forward(const DeviceMatrix &X)
@@ -312,6 +317,26 @@ nn_real DataParallelNeuralNetwork::loss(const DeviceMatrix &y, nn_real weight)
    * the CPU implementation. Examples of CUDA kernels in "gpu_func.cu" to use:
    * DCELoss, to_cpu, DSquare, DSum.
    */
+  DeviceMatrix s(1,1);
+  DCELoss(cache.yc,y,s);
+  arma::Mat<nn_real> temp(1,1);
+  s.to_cpu(temp);
+  nn_real data_loss =  temp(0,0) * weight; 
+  nn_real norm_sum = 0;
+  for (int i = 0; i < W.size(); i++){
+    DeviceMatrix square(W[i]);
+    DSquare(W[i],square);
+    DeviceMatrix rowSum(1,W[i].n_cols);
+    DSum(square,rowSum,1,0);
+    DeviceMatrix s(1,1);
+    DSum(rowSum,s,1,1);
+    arma::Mat<nn_real> temp(1,1);
+    s.to_cpu(temp);
+    norm_sum += temp(0,0);
+  }
+  nn_real reg_loss = 0.5 * reg * norm_sum;
+  nn_real loss = data_loss + reg_loss;
+  return loss;
 }
 
 void DataParallelNeuralNetwork::backward(const DeviceMatrix &y,
@@ -327,6 +352,33 @@ void DataParallelNeuralNetwork::backward(const DeviceMatrix &y,
    * Examples of CUDA kernels to use: DElemArith, to_gpu, tiledGEMM, DSum,
    * DSigmoidBackprop.
    */
+  DeviceMatrix diff(cache.yc.n_rows,cache.yc.n_cols);
+  cache.yc.to_gpu(diff);
+  DElemArith(diff,y,grad_weight,-1);
+  DeviceMatrix dW1(W[1].n_rows,W[1].n_cols);
+  DeviceMatrix db1(b[1].n_rows,b[1].n_cols);
+  W[1].to_gpu(dW1);
+  tiledGEMM(diff,false,cache.a[0],true,dW1,1,reg);
+
+  DSum(diff,db1,1,1);
+  grads.dW[1] = dW1;
+  grads.db[1] = db1; 
+
+  DeviceMatrix da1(cache.a[0].n_rows,cache.a[0].n_cols);
+  DeviceMatrix dz1(cache.z[0].n_rows,cache.z[0].n_cols);
+  tiledGEMM(W[1],true,diff,false,da1,1,0);
+  
+  DSigmoidBackprop(da1,cache.a[0],dz1);
+
+
+  DeviceMatrix dW0(W[0].n_rows,W[0].n_cols);
+  DeviceMatrix db0(b[0].n_rows,b[0].n_cols);
+  W[0].to_gpu(dW0);
+  tiledGEMM(dz1,false,cache.X,true,dW0,1,reg);
+
+  DSum(dz1,db0,1,1);
+  grads.dW[0] = dW0;
+  grads.db[0] = db0; 
 }
 
 void DataParallelNeuralNetwork::step()
@@ -336,6 +388,10 @@ void DataParallelNeuralNetwork::step()
    * HINT: See part of the CPU implementation void train above.
    * Example of CUDA kernel to use: DElemArith.
    */
+  for (int i = 0; i < W.size(); i++){
+    DElemArith(W[i],grads.dW[i],1,-lr);
+    DElemArith(b[i],grads.db[i],1,-lr);
+  }
 }
 
 void DataParallelNeuralNetwork::to_cpu(NeuralNetwork &nn)
@@ -344,4 +400,8 @@ void DataParallelNeuralNetwork::to_cpu(NeuralNetwork &nn)
    * TODO: Implement this function.
    * HINT: Use DeviceMatrix::to_cpu. You need to copy W[] and b[].
    */
+  for (int i = 0; i < nn.num_layers; i++){
+    W[i].to_cpu(nn.W[i]);
+    b[i].to_cpu(nn.b[i]);
+  }
 }
