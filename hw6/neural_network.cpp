@@ -320,6 +320,10 @@ nn_real DataParallelNeuralNetwork::loss(const DeviceMatrix &y, nn_real weight) {
   /**
    * TODO: Return the sum of (data_loss + reg_loss) across all MPI processes.
    */
+  nn_real global_sum; 
+  nn_real local_sum = data_loss + reg_loss;
+  MPI_SAFE_CALL(MPI_Allreduce(&local_sum, &global_sum, 1, MPI_FLOAT, MPI_SUM,MPI_COMM_WORLD));
+  return global_sum;
 }
 
 void DataParallelNeuralNetwork::backward(const DeviceMatrix &y,
@@ -348,6 +352,7 @@ void DataParallelNeuralNetwork::backward(const DeviceMatrix &y,
    * HINT: Use grads.gpu_mem_pool and grads.total_elements. The 'division' step
    * of computing the average has already been completed using grad_weight.
    */
+  MPI_SAFE_CALL(MPI_Allreduce(MPI_IN_PLACE, grads.gpu_mem_pool.get()->memptr(), 1, MPI_FLOAT, MPI_SUM,MPI_COMM_WORLD));
 }
 
 void DataParallelNeuralNetwork::step() {
@@ -370,6 +375,25 @@ void DataParallelNeuralNetwork::train(NeuralNetwork &nn, arma::Mat<nn_real> &X,
    * The last minibatch in an epoch may be smaller than previous minibatches in 
    * the epoch; you can use DeviceMatrix::set_n_cols() to deal with this case.
    */
+  int rank, num_procs;
+  MPI_SAFE_CALL(MPI_Comm_size(MPI_COMM_WORLD, &num_procs));
+  MPI_SAFE_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &rank));
+  if (rank == 0 && num_procs > 1){
+    MPI_SAFE_CALL(MPI_Bcast(X.memptr(),X.n_elem,MPI_FLOAT,0,MPI_COMM_WORLD));
+    MPI_SAFE_CALL(MPI_Bcast(y.memptr(),y.n_elem,MPI_FLOAT,0,MPI_COMM_WORLD));
+  }
+  int mini_batch_size = get_mini_batch_size(hparams.batch_size,num_procs,rank);
+  int off_set = get_offset(hparams.batch_size,num_procs,rank);
+  DeviceMatrix X_batch(X.memptr()+off_set,X.n_rows,mini_batch_size);
+  DeviceMatrix y_batch(y.memptr()+off_set,y.n_rows,mini_batch_size);
+  for (int epoch = 0; epoch < hparams.num_epochs; ++epoch){
+
+    forward(X_batch);
+    backward(y_batch,1/num_procs);
+    step();
+
+  }
+
 }
 
 void DataParallelNeuralNetwork::to_cpu(NeuralNetwork &nn) {
