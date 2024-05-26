@@ -352,7 +352,7 @@ void DataParallelNeuralNetwork::backward(const DeviceMatrix &y,
    * HINT: Use grads.gpu_mem_pool and grads.total_elements. The 'division' step
    * of computing the average has already been completed using grad_weight.
    */
-  MPI_SAFE_CALL(MPI_Allreduce(MPI_IN_PLACE, grads.gpu_mem_pool.get()->memptr(), 1, MPI_FLOAT, MPI_SUM,MPI_COMM_WORLD));
+  MPI_SAFE_CALL(MPI_Allreduce(MPI_IN_PLACE, grads.gpu_mem_pool.get()->memptr(), grads.total_elements, MPI_FLOAT, MPI_SUM,MPI_COMM_WORLD));
 }
 
 void DataParallelNeuralNetwork::step() {
@@ -378,20 +378,41 @@ void DataParallelNeuralNetwork::train(NeuralNetwork &nn, arma::Mat<nn_real> &X,
   int rank, num_procs;
   MPI_SAFE_CALL(MPI_Comm_size(MPI_COMM_WORLD, &num_procs));
   MPI_SAFE_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &rank));
-  if (rank == 0 && num_procs > 1){
+  int N = X.n_cols;
+  if (num_procs > 1){
     MPI_SAFE_CALL(MPI_Bcast(X.memptr(),X.n_elem,MPI_FLOAT,0,MPI_COMM_WORLD));
     MPI_SAFE_CALL(MPI_Bcast(y.memptr(),y.n_elem,MPI_FLOAT,0,MPI_COMM_WORLD));
   }
-  int mini_batch_size = get_mini_batch_size(hparams.batch_size,num_procs,rank);
-  int off_set = get_offset(hparams.batch_size,num_procs,rank);
-  DeviceMatrix X_batch(X.memptr()+off_set,X.n_rows,mini_batch_size);
-  DeviceMatrix y_batch(y.memptr()+off_set,y.n_rows,mini_batch_size);
+  int num_batches = get_num_batches(N, hparams.batch_size);
+
   for (int epoch = 0; epoch < hparams.num_epochs; ++epoch){
-
-    forward(X_batch);
-    backward(y_batch,1/num_procs);
-    step();
-
+    int batch_start = 0;
+    for (int batch = 0; batch < num_batches; ++batch){
+      int b_size = get_batch_size(N, hparams.batch_size, batch);
+      int last_col = batch_start + b_size;
+      arma::Mat<nn_real> X_batch = X.cols(batch_start, last_col - 1);
+      arma::Mat<nn_real> y_batch = y.cols(batch_start, last_col - 1);
+      int mini_batch_size = get_mini_batch_size(b_size,num_procs,rank);
+      int off_set = get_offset(b_size,num_procs,rank);
+      // std::cout<< "proc " <<rank <<": " << "batch size: " << b_size
+      // << " mini bacth size: " << mini_batch_size << " off_set:" << off_set 
+      // << std::endl;
+      int mini_last_col = off_set + mini_batch_size -1;
+      arma::Mat<nn_real> X_minibatch_cpu = X_batch.cols(off_set, mini_last_col);
+      arma::Mat<nn_real> y_minibatch_cpu = y_batch.cols(off_set, mini_last_col);
+      DeviceMatrix X_minibatch(X_minibatch_cpu);
+      DeviceMatrix y_minibatch(y_minibatch_cpu);
+      cache.z[0].set_n_cols(mini_batch_size);
+      cache.z[1].set_n_cols(mini_batch_size);
+      cache.a[0].set_n_cols(mini_batch_size);
+      cache.a[1].set_n_cols(mini_batch_size);
+      cache.yc.set_n_cols(mini_batch_size);
+      cache.X.set_n_cols(mini_batch_size);
+      forward(X_minibatch);
+      backward(y_minibatch,1.0/b_size);
+      step();
+      batch_start = last_col;
+    }
   }
 
 }
