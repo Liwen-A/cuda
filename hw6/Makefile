@@ -34,7 +34,7 @@ GTEST_SRCS_ = $(GTEST_SRC)/*.cc $(GTEST_SRC)/*.h $(GTEST_HEADERS)
 
 CPPFLAGS=-isystem $(GTEST_INC)
 
-default: main_q1
+default: main_q1 main_q2
 
 gtest: gtest.a gtest_main.a
 gtest-all.o : $(GTEST_SRCS_)
@@ -62,5 +62,12 @@ main_q1.o : $(SRC1) $(HDR1) $(GTEST_HEADERS)
 main_q1: main_q1.o gpu_func.o neural_network.o mnist.o gtest_main.a
 	mpic++ $^ -o $@ $(LDFLAGS)
 
+SRC2=main_q2.cpp
+HDR2=gpu_func.h neural_network.h mnist.h common.h
+main_q2.o : $(SRC2) $(HDR2) $(GTEST_HEADERS)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(INCFLAGS) -c $(SRC2)
+main_q2: main_q2.o gpu_func.o neural_network.o mnist.o gtest_main.a
+	mpic++ $^ -o $@ $(LDFLAGS)
+
 clean:
-	rm -f main_q1 *.o *.a
+	rm -f main_q1 main_q2 *.o *.a

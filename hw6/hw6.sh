@@ -19,3 +19,10 @@ mpirun -n 1 ./main_q1
 # mpirun -n 2 ./main_q1
 # mpirun -n 3 ./main_q1
 # mpirun -n 4 ./main_q1
+
+# echo
+# echo Output from main_q2
+# echo ----------------
+# mpirun -n 1 ./main_q2
+# mpirun -n 2 ./main_q2
+# mpirun -n 4 ./main_q2
