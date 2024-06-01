@@ -26,7 +26,14 @@ std::vector<uint> computeBlockHistograms(
     uint blockSize
 ) {
     std::vector<uint> blockHistograms(numBlocks * numBuckets, 0);
-    // TODO
+    
+    #pragma omp parallel for
+    for (uint i = 0; i < numBlocks; i++){
+        for (uint j = i*blockSize; (j < (i + 1)*blockSize && j < keys.size()); j++){
+            uint b = (numBuckets - 1) & (keys[j] >> startBit);
+            blockHistograms[i*numBuckets + b]++;
+        }
+    }
     return blockHistograms;
 }
 
@@ -41,7 +48,15 @@ std::vector<uint> reduceLocalHistoToGlobal(
     uint numBuckets
 ) {
     std::vector<uint> globalHisto(numBuckets, 0);
-    // TODO
+    
+    #pragma omp parallel for 
+    for (uint j = 0; j < numBuckets; j++){
+        uint sum = 0;
+        for (uint i = 0; i < numBlocks; i++){
+            sum += blockHistograms[i*numBuckets + j];
+        }
+        globalHisto[j] = sum;
+    }
     return globalHisto;
 }
 
@@ -54,7 +69,8 @@ std::vector<uint> scanGlobalHisto(
     uint numBuckets
 ) {
     std::vector<uint> globalHistoExScan(numBuckets, 0);
-    // TODO
+    for (uint i = 1; i < numBuckets; ++i)
+        globalHistoExScan[i] = globalHistoExScan[i-1] + globalHisto[i-1];
     return globalHistoExScan;
 }
 
@@ -71,7 +87,19 @@ std::vector<uint> computeBlockExScanFromGlobalHisto(
     const std::vector<uint> &blockHistograms
 ) {
     std::vector<uint> blockExScan(numBuckets * numBlocks, 0);
-    // TODO
+
+    #pragma omp parallel for
+    for (uint i = 0; i < numBuckets; i++){
+        blockExScan[i] = globalHistoExScan[i];
+    }
+
+    #pragma omp parallel for
+    for (uint j = 0; j < numBuckets; j++) {
+        for (uint i = 1; i < numBlocks; i++) {
+            blockExScan[i*numBuckets + j] = blockExScan[(i - 1)*numBuckets + j] + blockHistograms[(i - 1)*numBuckets + j];
+        }
+    }
+
     return blockExScan;
 }
 
@@ -90,7 +118,17 @@ void populateOutputFromBlockExScan(
     const std::vector<uint> &keys,
     std::vector<uint> &sorted
 ) {
-    // TODO
+    uint mask = numBuckets - 1;
+    
+    #pragma omp parallel for
+    for (uint n = 0; n < numBlocks; n++){
+        std::vector<uint> bucketCounts(numBuckets, 0);
+        for (uint i = n*blockSize; (i < (n + 1)*blockSize && i < keys.size()); i++){
+            uint bucket = (keys[i] >> startBit) & mask;
+            sorted[blockExScan[n*numBuckets + bucket] + bucketCounts[bucket]] = keys[i];
+            ++bucketCounts[bucket];
+        }
+    }
 }
 
 /* Function: radixSortParallelPass
@@ -147,10 +185,11 @@ int radixSortParallel(
 
 void runBenchmark(std::vector<uint>& keys_parallel, std::vector<uint>& temp_keys, uint kNumBits, uint n_blocks, uint n_threads){
     // TODO: Call omp_set_num_threads() with the correct argument
-
+    omp_set_num_threads(n_threads);
     double startRadixParallel = omp_get_wtime();
     // TODO: Call radixSortParallel() with the correct arguments
 
+    radixSortParallel(keys_parallel,temp_keys,kNumBits,n_blocks);
     double endRadixParallel = omp_get_wtime();
 
     printf("%8.3f", endRadixParallel - startRadixParallel);
