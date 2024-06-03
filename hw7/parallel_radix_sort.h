@@ -117,16 +117,14 @@ void populateOutputFromBlockExScan(
     uint blockSize, 
     const std::vector<uint> &keys,
     std::vector<uint> &sorted
-) {
-    uint mask = numBuckets - 1;
-    
+) { 
     #pragma omp parallel for
-    for (uint n = 0; n < numBlocks; n++){
+    for (uint i = 0; i < numBlocks; i++){
         std::vector<uint> bucketCounts(numBuckets, 0);
-        for (uint i = n*blockSize; (i < (n + 1)*blockSize && i < keys.size()); i++){
-            uint bucket = (keys[i] >> startBit) & mask;
-            sorted[blockExScan[n*numBuckets + bucket] + bucketCounts[bucket]] = keys[i];
-            ++bucketCounts[bucket];
+        for (uint j = i*blockSize; (j < (i + 1)*blockSize && j < keys.size()); j++){
+            uint b = (keys[j] >> startBit) & (numBuckets - 1);
+            sorted[blockExScan[i*numBuckets + b] + bucketCounts[b]] = keys[j];
+            bucketCounts[b]++;
         }
     }
 }
